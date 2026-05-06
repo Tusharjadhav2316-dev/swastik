@@ -1,0 +1,16 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Users can only read/write their own data
+    match /users/{uid}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // DSA problems: all auth users read, only admin writes (via Admin SDK)
+    match /dsa_problems/{doc} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+  }
+}
