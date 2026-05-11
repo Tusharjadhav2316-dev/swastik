@@ -34,14 +34,45 @@ export default function FaceScanner({ onFaceDetected, compact }: FaceScannerProp
   // 2 — camera
   useEffect(() => {
     if (stage !== "ready") return;
-    let stream: MediaStream;
-    navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240, facingMode: "user" } })
-      .then(s => {
-        stream = s;
-        if (videoRef.current) videoRef.current.srcObject = s;
-      })
-      .catch(() => { setStage("error"); setLabel("Allow camera access."); });
-    return () => { stream?.getTracks().forEach(t => t.stop()); };
+    let currentStream: MediaStream | null = null;
+
+    const startCamera = async () => {
+      const constraints = [
+        { video: { width: 320, height: 240, facingMode: "user" } },
+        { video: { width: { ideal: 640 }, height: { ideal: 480 } } },
+        { video: true }
+      ];
+
+      for (const constraint of constraints) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia(constraint);
+          currentStream = stream;
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+            // Explicitly play to ensure video starts
+            await videoRef.current.play().catch(e => console.error("Video play failed:", e));
+          }
+          return; // Success
+        } catch (err: any) {
+          console.warn(`Camera constraint failed:`, constraint, err.name);
+          if (err.name === "NotReadableError") {
+             setLabel("Camera in use by another app.");
+             break; 
+          }
+        }
+      }
+      
+      setStage("error");
+      setLabel("Allow camera access.");
+    };
+
+    startCamera();
+
+    return () => {
+      if (currentStream) {
+        currentStream.getTracks().forEach(t => t.stop());
+      }
+    };
   }, [stage]);
 
   // 3 — detection loop starts when video plays
