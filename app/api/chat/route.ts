@@ -4,175 +4,309 @@ import { adminAuth, adminDb } from "@/lib/firebase-admin";
 import { buildSystemPrompt } from "@/lib/prompts";
 import Groq from "groq-sdk";
 
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-});
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+// ── All MCP Tool Definitions for Groq function calling ────────────────────────
+const GROQ_TOOLS: Groq.Chat.ChatCompletionTool[] = [
+  {
+    type: "function",
+    function: {
+      name: "get_time",
+      description: "Get the current accurate time, date and day of week for any timezone.",
+      parameters: {
+        type: "object",
+        properties: {
+          timezone: { type: "string", description: "IANA timezone, e.g. Asia/Kolkata", default: "Asia/Kolkata" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_system_info",
+      description: "Get SWASTIK system status and health of all intelligence modules.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_news",
+      description: "Fetch the latest news articles on any topic (NewsAPI + GDELT fallback).",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Topic or keywords to search news for" },
+          limit: { type: "number", description: "Number of articles (default 8, max 20)" },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_weather",
+      description: "Get current weather conditions for any city using OpenWeatherMap.",
+      parameters: {
+        type: "object",
+        properties: {
+          city: { type: "string", description: "City name, e.g. Mumbai, London, New York" },
+        },
+        required: ["city"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "open_app",
+      description: "Open any app by name (Spotify, YouTube, WhatsApp, Netflix, Swiggy, GitHub, etc). Returns the web URL and mobile deep link.",
+      parameters: {
+        type: "object",
+        properties: {
+          app_name: { type: "string", description: "App name to open, e.g. spotify, youtube, whatsapp" },
+        },
+        required: ["app_name"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "send_message",
+      description: "Compose a message on WhatsApp, Gmail, or Telegram. Returns a compose URL.",
+      parameters: {
+        type: "object",
+        properties: {
+          platform: { type: "string", enum: ["whatsapp", "gmail", "telegram"] },
+          recipient: { type: "string", description: "Phone number for WhatsApp, email for Gmail, username for Telegram" },
+          message: { type: "string", description: "Message to pre-fill" },
+        },
+        required: ["platform"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "play_music",
+      description: "Play music or video via Invidious (YouTube) or Deezer. No API key needed.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Song or video to search" },
+          platform: { type: "string", enum: ["youtube", "spotify"], default: "youtube" },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "fetch_world_intelligence",
+      description: "Get live global conflict data and intelligence pins from GDELT for the 3D globe.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+];
+
+// ── Call MCP tool via Next.js internal proxy ──────────────────────────────────
+async function callMcpTool(
+  toolName: string,
+  toolArgs: Record<string, unknown>,
+  reqOrigin: string,
+  cookieHeader: string
+): Promise<unknown> {
+  const res = await fetch(`${reqOrigin}/api/mcp`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Cookie: cookieHeader,
+    },
+    body: JSON.stringify({ tool: toolName, input: toolArgs }),
+    signal: AbortSignal.timeout(12_000),
+  });
+  return res.json();
+}
 
 export async function POST(req: NextRequest) {
   try {
+    // ── Auth ──────────────────────────────────────────────────────────────────
     const sessionCookie = req.cookies.get("__session")?.value;
     if (!sessionCookie) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     let uid: string;
     try {
-      const decodedToken = await adminAuth.verifySessionCookie(sessionCookie, true);
-      uid = decodedToken.uid;
-    } catch (e: any) {
+      const decoded = await adminAuth.verifySessionCookie(sessionCookie, true);
+      uid = decoded.uid;
+    } catch {
       return NextResponse.json({ error: "Invalid session" }, { status: 401 });
     }
 
     const { message, sessionId, mode = "student", emotion = "neutral" } = await req.json();
     if (!message) return NextResponse.json({ error: "Message required" }, { status: 400 });
 
+    // ── Load user context ─────────────────────────────────────────────────────
     const userDoc = await adminDb.collection("users").doc(uid).get();
     const userData = userDoc.data() || {};
     const userName = userData.displayName || "User";
 
-    const memorySnapshot = await adminDb.collection("users").doc(uid).collection("memory").get();
-    const memoryItems = memorySnapshot.docs.map(doc => `${doc.id}: ${JSON.stringify(doc.data())}`);
-    const userMemory = memoryItems.length > 0 ? memoryItems.join("\n") : "No previous memory stored.";
+    const memorySnapshot = await adminDb
+      .collection("users").doc(uid).collection("memory").get();
+    const userMemory =
+      memorySnapshot.docs.map(d => `${d.id}: ${JSON.stringify(d.data())}`).join("\n") ||
+      "No previous memory stored.";
 
-    let history: { role: "system" | "user" | "assistant"; content: string }[] = [];
+    let history: Groq.Chat.ChatCompletionMessageParam[] = [];
     try {
-      const historySnapshot = await adminDb.collection("users").doc(uid).collection("conversations")
+      const snap = await adminDb
+        .collection("users").doc(uid).collection("conversations")
         .orderBy("createdAt", "desc").limit(20).get();
-      history = historySnapshot.docs.map(doc => ({
-        role: doc.data().role as "user" | "assistant",
-        content: doc.data().content,
-      })).reverse();
-    } catch (e) {}
-
-    const tools: any[] = [
-      {
-        type: "function",
-        function: {
-          name: "get_time_and_date",
-          description: "Get the current accurate time and date",
-          parameters: { type: "object", properties: {} },
-        },
-      },
-      {
-        type: "function",
-        function: {
-          name: "fetch_world_intelligence",
-          description: "Get live global conflict data and intelligence pins for the 3D globe (via GDELT)",
-          parameters: { type: "object", properties: {} },
-        },
-      },
-      {
-        type: "function",
-        function: {
-          name: "play_music",
-          description: "Play music or video using free Invidious/Deezer providers. No API keys required.",
-          parameters: {
-            type: "object",
-            properties: {
-              query: { type: "string", description: "The song or video to search for" },
-              platform: { type: "string", enum: ["youtube", "spotify"], default: "youtube", description: "Choose youtube for video or spotify for music" }
-            },
-            required: ["query"]
-          },
-        },
-      },
-    ];
+      history = snap.docs
+        .map(d => ({ role: d.data().role as "user" | "assistant", content: d.data().content }))
+        .reverse();
+    } catch {}
 
     const systemPrompt = buildSystemPrompt({
-      mode, userName, goals: userData.goals || "None", weakTopic: userData.weakTopic || "None",
-      userMemory, streak: userData.streak || 0, pendingTasks: "None",
+      mode, userName,
+      goals: userData.goals || "None",
+      weakTopic: userData.weakTopic || "None",
+      userMemory,
+      streak: userData.streak || 0,
+      pendingTasks: "None",
       currentTime: new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" }),
-      emotion
+      emotion,
     });
 
-    let messages: any[] = [{ role: "system", content: systemPrompt }, ...history, { role: "user", content: message }];
+    // ── Groq agentic tool-calling loop ────────────────────────────────────────
+    let messages: Groq.Chat.ChatCompletionMessageParam[] = [
+      { role: "system", content: systemPrompt },
+      ...history,
+      { role: "user", content: message },
+    ];
 
-    let completion: any = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      messages,
-      tools,
-      tool_choice: "auto",
-    });
+    let visualSignal: { visualType: string; data: unknown } | null = null;
+    const cookieHeader = req.headers.get("cookie") || "";
+    const origin = req.nextUrl.origin;
 
-    let responseMessage = completion.choices[0].message;
+    // Loop until stop or max 5 iterations (prevent infinite loops)
+    for (let iteration = 0; iteration < 5; iteration++) {
+      const completion = await groq.chat.completions.create({
+        model: "llama-3.3-70b-versatile",
+        messages,
+        tools: GROQ_TOOLS,
+        tool_choice: "auto",
+        max_tokens: 2048,
+      });
 
-    let visualSignal = null;
-
-    if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
+      const choice = completion.choices[0];
+      const responseMessage = choice.message;
       messages.push(responseMessage);
+
+      // ── Stop condition ────────────────────────────────────────────────────
+      if (choice.finish_reason === "stop" || !responseMessage.tool_calls?.length) {
+        break;
+      }
+
+      // ── Execute tool calls ────────────────────────────────────────────────
       for (const toolCall of responseMessage.tool_calls) {
         const toolName = toolCall.function.name;
-        const toolArgs = JSON.parse(toolCall.function.arguments);
-        
-        console.log(`SWASTIK: Executing tool ${toolName}...`);
+        let toolArgs: Record<string, unknown> = {};
+        try {
+          toolArgs = JSON.parse(toolCall.function.arguments);
+        } catch {}
 
-        if (toolName === "get_time_and_date") {
-          messages.push({ tool_call_id: toolCall.id, role: "tool", name: toolName, content: new Date().toLocaleString() });
-        } else {
-          // Forward all other tools to the MCP Python server via our proxy
-          try {
-            const mcpRes = await fetch(`${req.nextUrl.origin}/api/mcp`, {
-              method: "POST",
-              headers: { 
-                "Content-Type": "application/json",
-                "Cookie": req.headers.get("cookie") || "" // Pass session cookie for auth
-              },
-              body: JSON.stringify({ tool: toolName, input: toolArgs }),
-            });
-            const toolData = await mcpRes.json();
-            
-            // Capture visual signal for stream
-            if (toolName === 'fetch_world_intelligence') {
-              visualSignal = { type: 'globe', data: toolData.globePins };
-            } else if (toolName === 'play_music' && toolData.action === 'embed_player') {
-              visualSignal = { type: 'player', data: { url: toolData.embedUrl, platform: toolData.platform } };
-            }
+        console.log(`SWASTIK: Tool call [${iteration}] → ${toolName}`, toolArgs);
 
-            messages.push({ 
-              tool_call_id: toolCall.id, 
-              role: "tool", 
-              name: toolName, 
-              content: JSON.stringify(toolData) 
-            });
-          } catch (e) {
-            console.error(`Tool ${toolName} failed:`, e);
-            messages.push({ tool_call_id: toolCall.id, role: "tool", name: toolName, content: "Error executing tool." });
-          }
+        let toolResult: unknown;
+        try {
+          toolResult = await callMcpTool(toolName, toolArgs, origin, cookieHeader);
+        } catch (e) {
+          toolResult = { error: `Tool '${toolName}' failed: ${e}` };
         }
+
+        // Capture visual signals for stream
+        const td = toolResult as Record<string, unknown>;
+        if (toolName === "fetch_world_intelligence" && td?.globePins) {
+          visualSignal = { visualType: "globe", data: td.globePins };
+        } else if (toolName === "play_music" && td?.action === "embed_player") {
+          visualSignal = { visualType: "player", data: { url: td.embedUrl, platform: td.platform } };
+        } else if (toolName === "open_app" && td?.webUrl) {
+          visualSignal = { visualType: "app_open", data: { webUrl: td.webUrl, deepLink: td.deepLink, appName: td.appName } };
+        } else if (toolName === "get_weather" && td?.temperature !== undefined) {
+          visualSignal = { visualType: "weather", data: toolResult };
+        }
+
+        messages.push({
+          role: "tool",
+          tool_call_id: toolCall.id,
+          content: JSON.stringify(toolResult),
+        });
       }
-      completion = await groq.chat.completions.create({ model: "llama-3.3-70b-versatile", messages });
-      responseMessage = completion.choices[0].message;
     }
 
-    const fullResponse = responseMessage.content || "Done.";
+    // ── Extract final text response ───────────────────────────────────────────
+    const lastMessage = messages[messages.length - 1];
+    const fullResponse =
+      (lastMessage.role === "assistant" ? lastMessage.content : null) || "Done boss.";
+
+    // ── Stream response back to client ────────────────────────────────────────
     const encoder = new TextEncoder();
     const readable = new ReadableStream({
       async start(controller) {
-        // Send visual signal first if present
+        // 1. Send visual signal first (if any)
         if (visualSignal) {
-          const { type: visualType, ...visualRest } = visualSignal as { type: string; data: unknown };
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "visual", visualType, ...visualRest })}\n\n`));
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify({ type: "visual", ...visualSignal })}\n\n`)
+          );
         }
 
-        const chunks = fullResponse.split(" ");
-        for (const chunk of chunks) {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "text", content: chunk + " " })}\n\n`));
-          await new Promise(r => setTimeout(r, 20));
+        // 2. Stream text word by word
+        const words = (fullResponse as string).split(" ");
+        for (const word of words) {
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify({ type: "text", content: word + " " })}\n\n`)
+          );
+          await new Promise(r => setTimeout(r, 18));
         }
-        
-        const createdAt = new Date();
-        const batch = adminDb.batch();
-        const uRef = adminDb.collection("users").doc(uid).collection("conversations").doc();
-        batch.set(uRef, { role: "user", content: message, sessionId, createdAt });
-        const aRef = adminDb.collection("users").doc(uid).collection("conversations").doc();
-        batch.set(aRef, { role: "assistant", content: fullResponse, sessionId, createdAt: new Date(createdAt.getTime() + 100) });
-        await batch.commit();
 
+        // 3. Persist conversation
+        try {
+          const createdAt = new Date();
+          const batch = adminDb.batch();
+          const uRef = adminDb.collection("users").doc(uid).collection("conversations").doc();
+          batch.set(uRef, { role: "user", content: message, sessionId, createdAt });
+          const aRef = adminDb.collection("users").doc(uid).collection("conversations").doc();
+          batch.set(aRef, {
+            role: "assistant",
+            content: fullResponse,
+            sessionId,
+            createdAt: new Date(createdAt.getTime() + 100),
+          });
+          await batch.commit();
+        } catch (e) {
+          console.error("SWASTIK: Failed to save conversation:", e);
+        }
+
+        // 4. Done signal
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "done" })}\n\n`));
         controller.close();
-      }
+      },
     });
 
-    return new Response(readable, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return new Response(readable, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+      },
+    });
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : "Unknown error";
+    console.error("SWASTIK chat error:", msg);
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
