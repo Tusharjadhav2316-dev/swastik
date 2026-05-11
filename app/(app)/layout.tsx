@@ -5,6 +5,7 @@ import Header from "../../components/layout/Header";
 import VoiceBar from "../../components/layout/VoiceBar";
 import VoiceOrb from "../../components/swastik/VoiceOrb";
 import VoiceInitializer from "../../components/swastik/VoiceInitializer";
+import ErrorToast from "../../components/swastik/ErrorToast";
 import { redirect } from "next/navigation";
 import { adminAuth, adminDb } from "../../lib/firebase-admin";
 import { cookies } from "next/headers";
@@ -39,6 +40,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       <VoiceBar />
       <VoiceOrb />
       <VoiceInitializer />
+      <ErrorToast />
     </div>
   );
 }

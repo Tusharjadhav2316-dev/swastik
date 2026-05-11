@@ -1,64 +1,71 @@
 "use client";
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { AlertCircle, X } from 'lucide-react';
+import { X } from 'lucide-react';
+import { useVoiceStore } from '../../store/useVoiceStore';
 
-interface ErrorToastProps {
-  message: string;
-  onClose: () => void;
-  isVisible: boolean;
-}
+export default function ErrorToast() {
+  const { errorMessage, clearError } = useVoiceStore();
+  const [visible, setVisible] = useState(false);
 
-const ErrorToast: React.FC<ErrorToastProps> = ({ message, onClose, isVisible }) => {
+  // When errorMessage is set → show → auto-dismiss after 4000ms
   useEffect(() => {
-    if (isVisible) {
+    if (errorMessage) {
+      setVisible(true);
       const timer = setTimeout(() => {
-        onClose();
-      }, 5000);
+        setVisible(false);
+        setTimeout(clearError, 300); // wait for exit animation
+      }, 4000);
       return () => clearTimeout(timer);
     }
-  }, [isVisible, onClose]);
+  }, [errorMessage, clearError]);
+
+  const handleClose = () => {
+    setVisible(false);
+    setTimeout(clearError, 300);
+  };
 
   return (
     <AnimatePresence>
-      {isVisible && (
+      {visible && errorMessage && (
         <motion.div
-          initial={{ opacity: 0, y: 50, scale: 0.9 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.95, transition: { duration: 0.2 } }}
-          className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[100] px-6 py-4 rounded-2xl 
-                     bg-red-500/10 border border-red-500/20 backdrop-blur-xl 
-                     flex items-center gap-4 shadow-[0_8px_32px_rgba(239,68,68,0.2)]
-                     min-w-[320px] max-w-[90vw]"
+          initial={{ opacity: 0, y: -12 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -12 }}
+          transition={{ duration: 0.25, ease: 'easeOut' }}
+          style={{ background: 'var(--bg-secondary, #0d1117)', zIndex: 9999 }}
+          className="fixed top-6 right-6 flex items-center gap-3 px-[18px] py-[14px] rounded-xl
+                     border border-[#00d4ff]/30 backdrop-blur-xl
+                     shadow-[0_8px_32px_rgba(0,212,255,0.12)]"
         >
-          <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-500/20 flex items-center justify-center">
-            <AlertCircle className="w-5 h-5 text-red-500" />
-          </div>
-          
-          <div className="flex-grow">
-            <h4 className="text-sm font-semibold text-red-500">System Error</h4>
-            <p className="text-xs text-red-200/80 line-clamp-2">{message}</p>
+          {/* SW Avatar */}
+          <div className="w-8 h-8 rounded-full border border-[#00d4ff] flex items-center justify-center flex-shrink-0">
+            <span className="text-[10px] font-mono font-bold text-[#00d4ff] tracking-widest">SW</span>
           </div>
 
-          <button 
-            onClick={onClose}
-            className="flex-shrink-0 p-2 rounded-lg hover:bg-white/5 transition-colors group"
+          {/* Message */}
+          <p className="text-[13px] text-white/80 leading-snug max-w-[260px]">
+            {errorMessage}
+          </p>
+
+          {/* Close */}
+          <button
+            onClick={handleClose}
+            className="ml-1 p-1 rounded-md hover:bg-white/10 transition-colors flex-shrink-0"
           >
-            <X className="w-4 h-4 text-red-500/50 group-hover:text-red-500 transition-colors" />
+            <X className="w-3.5 h-3.5 text-white/40 hover:text-white/80 transition-colors" />
           </button>
 
           {/* Progress bar */}
-          <motion.div 
+          <motion.div
             initial={{ scaleX: 1 }}
             animate={{ scaleX: 0 }}
-            transition={{ duration: 5, ease: "linear" }}
-            className="absolute bottom-0 left-0 right-0 h-1 bg-red-500/30 origin-left"
+            transition={{ duration: 4, ease: 'linear' }}
+            className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#00d4ff]/40 origin-left rounded-b-xl"
           />
         </motion.div>
       )}
     </AnimatePresence>
   );
-};
-
-export default ErrorToast;
+}

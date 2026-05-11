@@ -16,7 +16,7 @@ let currentAudio: HTMLAudioElement | null = null;
 let eventListenersAttached = false;
 
 export function useVoicePipeline() {
-  const { setVoiceState, setTranscript, setIsRecording } = useVoiceStore();
+  const { setVoiceState, setTranscript, setIsRecording, setError } = useVoiceStore();
 
   const playNextInQueue = useCallback(() => {
     if (globalAudioQueue.length === 0 || globalIsPlaying) {
@@ -112,6 +112,7 @@ export function useVoicePipeline() {
     } catch (e) {
       console.error("LLM submission failed:", e);
       setVoiceState("error");
+      setError("My brain timed out boss. Internet issue maybe.");
       setTimeout(() => setVoiceState("idle"), 2000);
     }
   };
@@ -177,6 +178,7 @@ export function useVoicePipeline() {
           }
         } catch (e) {
           setVoiceState("error");
+          setError("Could not hear you clearly boss. Please try again.");
           setTimeout(() => setVoiceState("idle"), 2000);
         }
       };
@@ -187,6 +189,7 @@ export function useVoicePipeline() {
     } catch (e) {
       console.error("SWASTIK: Mic access denied:", e);
       setVoiceState("error");
+      setError("SWASTIK: Microphone access denied. Please allow mic permission boss.");
     } finally {
       globalIsInitializing = false;
     }

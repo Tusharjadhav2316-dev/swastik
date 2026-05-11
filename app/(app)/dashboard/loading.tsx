@@ -20,7 +20,8 @@ export default function Loading() {
             <div className="h-2 w-20 bg-white/5 rounded" />
             <div className="h-8 w-24 bg-white/5 rounded-md" />
           </div>
-          <div className="w-12 h-12 bg-white/5 border border-white/10 rounded-full" />
+          {/* Streak circle skeleton — 64px per spec */}
+          <div className="w-16 h-16 bg-white/5 border border-white/10 rounded-full animate-pulse" />
         </div>
       </div>
 
@@ -45,15 +46,10 @@ export default function Loading() {
               <div className="h-3 w-16 bg-white/5 rounded" />
             </div>
             
-            <div className="space-y-8">
+            {/* Goals skeleton — 2 divs h-16 rounded-lg per spec */}
+            <div className="space-y-4">
               {[1, 2].map((i) => (
-                <div key={i} className="flex flex-col gap-3">
-                  <div className="flex justify-between">
-                    <div className="h-3 w-32 bg-white/5 rounded" />
-                    <div className="h-3 w-8 bg-white/5 rounded" />
-                  </div>
-                  <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden" />
-                </div>
+                <div key={i} className="h-16 bg-white/5 rounded-lg animate-pulse" />
               ))}
             </div>
           </GlassCard>
@@ -63,12 +59,10 @@ export default function Loading() {
         <div className="flex flex-col gap-6">
           <GlassCard className="p-8 border-white/5 flex-1">
             <div className="h-6 w-32 bg-white/5 rounded mb-8" />
-            <div className="space-y-6">
+            {/* Tasks skeleton — 3 divs h-12 rounded-md per spec */}
+            <div className="space-y-3">
               {[1, 2, 3].map((i) => (
-                <div key={i} className="flex items-center gap-4">
-                  <div className="w-4 h-4 rounded border border-white/10 bg-white/5" />
-                  <div className="h-4 flex-1 bg-white/5 rounded" />
-                </div>
+                <div key={i} className="h-12 bg-white/5 rounded-md animate-pulse" />
               ))}
             </div>
           </GlassCard>

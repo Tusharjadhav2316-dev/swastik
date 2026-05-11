@@ -49,3 +49,4 @@ server/venv/
 server/**/__pycache__/
 *.pyc
 *.pyo
+.vercel
