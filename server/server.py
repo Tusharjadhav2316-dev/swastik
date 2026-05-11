@@ -25,43 +25,53 @@ register_weather_tools(mcp)
 register_app_tools(mcp)
 
 # ── HTTP POST endpoint so Next.js proxy can call tools directly ───────────────
-from fastapi import Request, HTTPException
+from starlette.responses import JSONResponse
+from starlette.requests import Request
 
-@mcp.app.post("/tools/{tool_name}")
-async def call_tool(tool_name: str, request: Request):
+@mcp.custom_route("/tools/{tool_name}", methods=["POST"])
+async def call_tool(request: Request):
     """Direct HTTP POST handler for Next.js → Python tool calls."""
+    tool_name = request.path_params.get("tool_name")
     try:
-        tools = mcp.list_tools()
+        tools = await mcp.list_tools()
         tool = next((t for t in tools if t.name == tool_name), None)
 
         if not tool:
             available = [t.name for t in tools]
-            raise HTTPException(
+            return JSONResponse(
                 status_code=404,
-                detail={"error": f"Tool '{tool_name}' not found", "available": available}
+                content={"error": f"Tool '{tool_name}' not found", "available": available}
             )
 
         input_data = await request.json()
         print(f"SWASTIK: Executing '{tool_name}' with input: {input_data}")
         result = await tool.run(input_data)
-        return result
+        
+        # If result is already a dict, return it. If it's a ToolResult, serialize it.
+        if hasattr(result, "content"):
+            # Handle standard MCP ToolResult
+            content = []
+            for item in result.content:
+                if hasattr(item, "text"):
+                    content.append({"type": "text", "text": item.text})
+            return JSONResponse(content)
+        
+        return JSONResponse(result)
 
-    except HTTPException:
-        raise
     except Exception as e:
         print(f"SWASTIK: Tool '{tool_name}' failed: {e}")
-        raise HTTPException(status_code=500, detail={"error": str(e)})
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
-@mcp.app.get("/health")
-async def health():
+@mcp.custom_route("/health", methods=["GET"])
+async def health(request: Request):
     """Quick health-check endpoint."""
-    return {"status": "ok", "server": "SWASTIK FastMCP", "port": 8000}
+    return JSONResponse({"status": "ok", "server": "SWASTIK FastMCP", "port": 8000})
 
 
 if __name__ == "__main__":
-    print("╔══════════════════════════════════════╗")
-    print("║   SWASTIK FastMCP Server v2.0        ║")
-    print("║   SSE Transport — port 8000          ║")
-    print("╚══════════════════════════════════════╝")
+    print("+--------------------------------------+")
+    print("|   SWASTIK FastMCP Server v2.0        |")
+    print("|   SSE Transport - port 8000          |")
+    print("+--------------------------------------+")
     mcp.run(transport="sse", host="0.0.0.0", port=8000)
