@@ -43,3 +43,9 @@ next-env.d.ts
 .env.local
 server/.env
 firebase-service-account.json
+
+# Python
+server/venv/
+server/**/__pycache__/
+*.pyc
+*.pyo
